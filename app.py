@@ -71,8 +71,6 @@ THEN Risk = Very Low
 (Low genetic risk + normal glucose)
 """
 
-!pip install scikit-fuzzy deap
-
 """# Data Loading
 
 """
