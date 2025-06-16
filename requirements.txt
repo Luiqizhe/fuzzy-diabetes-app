@@ -4,3 +4,4 @@ matplotlib
 scikit-fuzzy
 deap
 scipy
+networkx
