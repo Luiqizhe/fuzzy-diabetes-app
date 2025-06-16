@@ -2,6 +2,9 @@ streamlit
 numpy
 matplotlib
 scikit-fuzzy
+scikit-learn
 deap
 scipy
 networkx
+pandas
+seaborn
