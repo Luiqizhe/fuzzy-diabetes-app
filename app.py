@@ -406,7 +406,12 @@ risk_simulation = ctrl.ControlSystemSimulation(risk_ctrl_system)
 
 #cell 8
 # --- Classification Metrics (Streamlit Version) ---
-
+# Calculate optimal threshold from F1-score
+f1_scores = 2 * (precision * recall) / (precision + recall)
+f1_scores[np.isnan(f1_scores)] = 0  # Handle division by zero if it occurs
+optimal_f1_idx = np.argmax(f1_scores)
+optimal_threshold = thresholds[optimal_f1_idx]
+optimal_threshold = round(optimal_threshold, 2)
 st.subheader(f"📊 Classification Metrics (Optimal Threshold = {optimal_threshold}%)")
 
 # Display numerical metrics
