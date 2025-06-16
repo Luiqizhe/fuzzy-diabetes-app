@@ -453,6 +453,7 @@ risk_simulation = ctrl.ControlSystemSimulation(risk_ctrl_system)
 
 #cell 8
 # --- To process the entire DataFrame ---
+import streamlit as st
 results = []
 for i in range(len(df)):
     try:
@@ -474,8 +475,8 @@ for i in range(len(df)):
 df['predicted_fuzzy_risk'] = results
 # The final print statement for the DataFrame head was also adjusted slightly
 # to print more rows for better observation.
-print("\nResults for the first few rows after processing the entire DataFrame:")
-print(df[['Outcome', 'predicted_fuzzy_risk']].head(10)) # Changed from .head() to .head(10)
+st.subheader("Results for the first few rows after processing the entire DataFrame:")
+st.dataframe(df[['Outcome', 'predicted_fuzzy_risk']].head(10))
 
 #cell 9
 import numpy as np
