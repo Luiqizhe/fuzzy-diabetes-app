@@ -77,115 +77,82 @@ THEN Risk = Very Low
 
 #cell 2
 # Data Loading
+import streamlit as st
 import numpy as np
 import skfuzzy as fuzz
 from skfuzzy import control as ctrl
 import pandas as pd
-import matplotlib.pyplot as plt # Ensure matplotlib is imported for plotting
+import matplotlib.pyplot as plt
 
 # --- 1. Load Data ---
 try:
     df = pd.read_csv('https://raw.githubusercontent.com/Duzttt/FL-Diabetes-prediction/refs/heads/main/diabetes.csv')
+    st.success("Dataset loaded successfully.")
 except FileNotFoundError:
-    print("Error: 'diabetes.csv' not found. Please ensure the file is in the same directory as the script.")
-    exit()
+    st.error("Error: 'diabetes.csv' not found. Please check the file path.")
+    st.stop()
 
-# --- Data Preprocessing: Handle Zeros as Missing Values ---
-
-# Identify columns where 0 logically represents a missing value
-# (e.g., Glucose, BloodPressure, SkinThickness, Insulin, BMI cannot be 0 in a living person)
+# --- Data Preprocessing ---
 cols_with_zeros_as_missing = ['Glucose', 'BloodPressure', 'SkinThickness', 'Insulin', 'BMI']
-
-# Replace 0s with NaN in these specific columns
 df[cols_with_zeros_as_missing] = df[cols_with_zeros_as_missing].replace(0, np.nan)
 
-# Imputation Strategy: Fill NaN values
-# Median is often preferred for skewed data to avoid outliers influencing the imputation too much.
 for col in cols_with_zeros_as_missing:
     median_val = df[col].median()
     df[col].fillna(median_val, inplace=True)
-    print(f"Filled missing values in '{col}' with median: {median_val}")
+    st.write(f"Filled missing values in '{col}' with median: {median_val}")
 
-# --- Helper function to apply FCM and get parameters for Gaussian MFs ---
+# --- FCM Helper ---
 def get_fcm_mf_params(data_series, n_clusters, m=2, error=0.005, maxiter=1000):
-    """
-    Applies FCM to data and returns sorted centers, estimated sigmas for Gaussian MFs, and FPC.
-    """
     data_reshaped = data_series.values.reshape(-1, 1)
-
-    # Run FCM
     cntr, u, _, _, _, _, fpc = fuzz.cluster.cmeans(
         data_reshaped.T, n_clusters, m=m, error=error, maxiter=maxiter, init=None
     )
-
-    # Sort centers for consistent naming (e.g., low, medium, high)
     sorted_centers = np.sort(cntr.flatten())
-
-    # Calculate sigma for Gaussian MFs. This is a heuristic and can be refined.
-    # A common approach is to base sigma on the spread of data assigned to each cluster,
-    # or on the distance between centers. Using average distance between centers as a base.
     sigmas = []
+
     if n_clusters > 1:
-        # Calculate approximate sigma based on average distance between centers
-        avg_dist_between_centers = np.mean(np.diff(sorted_centers))
-        # This multiplier (e.g., 0.5) is a heuristic. You might need to tune it.
-        base_sigma = avg_dist_between_centers * 0.40
-        for _ in range(n_clusters):
-            sigmas.append(base_sigma)
-    else: # If n_clusters is 1, sigma needs to be derived from the overall data spread
-        sigmas.append(data_series.std() / 2) # Example, could be more sophisticated
+        avg_dist = np.mean(np.diff(sorted_centers))
+        base_sigma = avg_dist * 0.40
+        sigmas = [base_sigma] * n_clusters
+    else:
+        sigmas.append(data_series.std() / 2)
 
     return sorted_centers, sigmas, fpc
 
-# Dictionary to store FCM results (cluster centers and sigma for Gaussian MFs)
+# --- FPC Analysis ---
 fcm_mf_params = {}
+feature_columns = ['Glucose', 'BMI', 'Age', 'BloodPressure', 'Pregnancies',
+                   'DiabetesPedigreeFunction', 'SkinThickness', 'Insulin']
+n_clusters_range = range(2, 7)
 
-# --- Evaluate FCM for varying n_clusters and plot FPC ---
-# This helps determine the optimal number of clusters for each feature.
+st.subheader("Fuzzy Partition Coefficient (FPC) Evaluation")
 
-feature_columns = [
-    'Glucose', 'BMI', 'Age', 'BloodPressure', 'Pregnancies',
-    'DiabetesPedigreeFunction', 'SkinThickness', 'Insulin'
-]
-
-# Define the range of clusters to test
-n_clusters_range = range(2, 7) # Test from 2 to 6 clusters
-
-print("\n--- Evaluating FPC for different n_clusters for each feature ---")
 for col_name in feature_columns:
-    print(f"\nFeature: {col_name}")
+    st.markdown(f"**Feature: {col_name}**")
     fpcs = []
-
-    # Reshape data for skfuzzy.cmeans (it expects (n_features, n_samples))
     data_reshaped = df[col_name].values.reshape(-1, 1).T
 
     for n_c in n_clusters_range:
         try:
-            # Run FCM to get FPC
             _, _, _, _, _, _, fpc = fuzz.cluster.cmeans(
                 data_reshaped, n_c, m=2, error=0.005, maxiter=1000, init=None
             )
             fpcs.append(fpc)
-            print(f"  n_clusters={n_c}, FPC={fpc:.4f}")
+            st.write(f"n_clusters={n_c}, FPC={fpc:.4f}")
         except Exception as e:
-            print(f"  Error running FCM for {n_c} clusters on {col_name}: {e}")
-            fpcs.append(np.nan) # Append NaN if an error occurs
+            st.warning(f"Error running FCM for {n_c} clusters on {col_name}: {e}")
+            fpcs.append(np.nan)
 
-    # Plot FPC values
-    plt.figure(figsize=(8, 5))
-    plt.plot(n_clusters_range, fpcs, marker='o', linestyle='-')
-    plt.title(f'FPC vs. Number of Clusters for {col_name}')
-    plt.xlabel('Number of Clusters (n_clusters)')
-    plt.ylabel('Fuzzy Partition Coefficient (FPC)')
-    plt.grid(True)
-    plt.xticks(n_clusters_range)
-    plt.show()
+    fig, ax = plt.subplots()
+    ax.plot(n_clusters_range, fpcs, marker='o', linestyle='-')
+    ax.set_title(f'FPC vs. Number of Clusters for {col_name}')
+    ax.set_xlabel('Number of Clusters (n_clusters)')
+    ax.set_ylabel('FPC')
+    ax.grid(True)
+    ax.set_xticks(list(n_clusters_range))
+    st.pyplot(fig)
 
-print("\n--- FPC Evaluation Complete ---")
-print("Please review the FPC plots above for each feature.")
-print("Look for an 'elbow' point where the FPC value starts to plateau.")
-print("This 'elbow' suggests a good number of clusters for that feature.")
-print("\n--- Next, adjust the 'n_clusters_...' variables below based on your FPC analysis ---")
+st.info("Review the FPC plots above. Look for an 'elbow point' where the FPC levels off to choose the best number of clusters.")
 
 # --- Define how many fuzzy sets you want for each input feature. ---
 # IMPORTANT: Adjust these values based on the FPC plots you just reviewed.
@@ -199,47 +166,46 @@ n_clusters_dpf = 4     # Defaulting to 3, adjust based on FPC plot
 n_clusters_skin_thickness = 5 # Defaulting to 3, adjust based on FPC plot
 n_clusters_insulin = 5 # Defaulting to 3, adjust based on FPC plot
 
-
 # --- Apply FCM for each input feature with the CHOSEN n_clusters ---
 # Glucose
 centers, sigmas, fpc = get_fcm_mf_params(df['Glucose'], n_clusters_glucose)
 fcm_mf_params['glucose'] = {'centers': centers, 'sigmas': sigmas, 'fpc': fpc}
-print(f"\nGlucose FCM FPC (chosen {n_clusters_glucose} clusters): {fpc:.4f}")
+st.write(f"Glucose FCM FPC (chosen {n_clusters_glucose} clusters): {fpc:.4f}")
 
 # BMI
 centers, sigmas, fpc = get_fcm_mf_params(df['BMI'], n_clusters_bmi)
 fcm_mf_params['bmi'] = {'centers': centers, 'sigmas': sigmas, 'fpc': fpc}
-print(f"BMI FCM FPC (chosen {n_clusters_bmi} clusters): {fpc:.4f}")
+st.write(f"BMI FCM FPC (chosen {n_clusters_bmi} clusters): {fpc:.4f}")
 
 # Age
 centers, sigmas, fpc = get_fcm_mf_params(df['Age'], n_clusters_age)
 fcm_mf_params['age'] = {'centers': centers, 'sigmas': sigmas, 'fpc': fpc}
-print(f"Age FCM FPC (chosen {n_clusters_age} clusters): {fpc:.4f}")
+st.write(f"Age FCM FPC (chosen {n_clusters_age} clusters): {fpc:.4f}")
 
 # BloodPressure
 centers, sigmas, fpc = get_fcm_mf_params(df['BloodPressure'], n_clusters_blood_pressure)
 fcm_mf_params['blood_pressure'] = {'centers': centers, 'sigmas': sigmas, 'fpc': fpc}
-print(f"BloodPressure FCM FPC (chosen {n_clusters_blood_pressure} clusters): {fpc:.4f}")
+st.write(f"BloodPressure FCM FPC (chosen {n_clusters_blood_pressure} clusters): {fpc:.4f}")
 
 # Pregnancies
 centers, sigmas, fpc = get_fcm_mf_params(df['Pregnancies'], n_clusters_pregnancies)
 fcm_mf_params['pregnancies'] = {'centers': centers, 'sigmas': sigmas, 'fpc': fpc}
-print(f"Pregnancies FCM FPC (chosen {n_clusters_pregnancies} clusters): {fpc:.4f}")
+st.write(f"Pregnancies FCM FPC (chosen {n_clusters_pregnancies} clusters): {fpc:.4f}")
 
 # DiabetesPedigreeFunction
 centers, sigmas, fpc = get_fcm_mf_params(df['DiabetesPedigreeFunction'], n_clusters_dpf)
 fcm_mf_params['diabetes_pedigree_function'] = {'centers': centers, 'sigmas': sigmas, 'fpc': fpc}
-print(f"DPF FCM FPC (chosen {n_clusters_dpf} clusters): {fpc:.4f}")
+st.write(f"DPF FCM FPC (chosen {n_clusters_dpf} clusters): {fpc:.4f}")
 
 # SkinThickness
 centers, sigmas, fpc = get_fcm_mf_params(df['SkinThickness'], n_clusters_skin_thickness)
 fcm_mf_params['skin_thickness'] = {'centers': centers, 'sigmas': sigmas, 'fpc': fpc}
-print(f"SkinThickness FCM FPC (chosen {n_clusters_skin_thickness} clusters): {fpc:.4f}")
+st.write(f"SkinThickness FCM FPC (chosen {n_clusters_skin_thickness} clusters): {fpc:.4f}")
 
 # Insulin
 centers, sigmas, fpc = get_fcm_mf_params(df['Insulin'], n_clusters_insulin)
 fcm_mf_params['insulin'] = {'centers': centers, 'sigmas': sigmas, 'fpc': fpc}
-print(f"Insulin FCM FPC (chosen {n_clusters_insulin} clusters): {fpc:.4f}")
+st.write(f"Insulin FCM FPC (chosen {n_clusters_insulin} clusters): {fpc:.4f}")
 
 """# Exploratary Data Analysis"""
 
@@ -253,17 +219,18 @@ print(f"Insulin FCM FPC (chosen {n_clusters_insulin} clusters): {fpc:.4f}")
 # or ensure they cover the full range of expected values.
 # For simplicity, using your specified ranges. Adjust if your actual data ranges differ significantly.
 
+# --- Define Universes for Antecedents and Consequent ---
 glucose_uni = np.arange(df['Glucose'].min() * 0.9, df['Glucose'].max() * 1.1 + 1, 1)
 bmi_uni = np.arange(df['BMI'].min() * 0.9, df['BMI'].max() * 1.1 + 0.1, 0.1)
 age_uni = np.arange(df['Age'].min() * 0.9, df['Age'].max() * 1.1 + 1, 1)
 bp_uni = np.arange(df['BloodPressure'].min() * 0.9, df['BloodPressure'].max() * 1.1 + 1, 1)
-preg_uni = np.arange(df['Pregnancies'].min(), df['Pregnancies'].max() + 1, 1) # Keep as is for discrete
+preg_uni = np.arange(df['Pregnancies'].min(), df['Pregnancies'].max() + 1, 1)
 dpf_uni = np.arange(df['DiabetesPedigreeFunction'].min() * 0.9, df['DiabetesPedigreeFunction'].max() * 1.1 + 0.01, 0.01)
 skin_uni = np.arange(df['SkinThickness'].min() * 0.9, df['SkinThickness'].max() * 1.1 + 1, 1)
 insulin_uni = np.arange(df['Insulin'].min() * 0.9, df['Insulin'].max() * 1.1 + 1, 1)
+risk_uni = np.arange(0, 101, 1)
 
-
-# Antecedents (Inputs)
+# --- Define Antecedents and Consequent ---
 glucose = ctrl.Antecedent(glucose_uni, 'glucose')
 bmi = ctrl.Antecedent(bmi_uni, 'bmi')
 age = ctrl.Antecedent(age_uni, 'age')
@@ -272,57 +239,43 @@ pregnancies = ctrl.Antecedent(preg_uni, 'pregnancies')
 dpf = ctrl.Antecedent(dpf_uni, 'diabetes_pedigree_function')
 skin_thickness = ctrl.Antecedent(skin_uni, 'skin_thickness')
 insulin = ctrl.Antecedent(insulin_uni, 'insulin')
-
-# Consequent (Output)
-# Let's define risk as a percentage from 0 to 100
-risk_uni = np.arange(0, 101, 1)
 diabetes_risk = ctrl.Consequent(risk_uni, 'diabetes_risk')
 
-"""Define Membership Functions for Each Variable (MFs)"""
-
-#cell 4
-# Function to assign FCM-derived Gaussian MFs
-def assign_fcm_mfs(antecedent_obj, mf_params, n_clusters, default_names=['low', 'medium', 'high', 'very_high', 'extremely_high', 'super_high']):
+# --- Define Membership Function Assignment Function ---
+def assign_fcm_mfs(antecedent_obj, mf_params, n_clusters, default_names):
     centers = mf_params['centers']
     sigmas = mf_params['sigmas']
 
-    # Ensure the number of centers matches the specified n_clusters
     if len(centers) != n_clusters:
-        print(f"Warning: Number of centers ({len(centers)}) does not match n_clusters ({n_clusters}) for {antecedent_obj.label}. Using available centers.")
+        st.warning(f"{antecedent_obj.label}: Number of centers ({len(centers)}) ≠ n_clusters ({n_clusters}). Using available centers.")
 
-    # Assign MFs based on sorted centers
     for i in range(n_clusters):
         center = centers[i]
-        sigma = sigmas[i] # Assuming sigmas list has a sigma for each center
-
-        # Use provided names if available, otherwise use generic fcm_cluster_X
+        sigma = sigmas[i]
         mf_name = default_names[i] if i < len(default_names) else f'fcm_cluster_{i}'
         antecedent_obj[mf_name] = fuzz.gaussmf(antecedent_obj.universe, center, sigma)
 
-    print(f"Assigned {n_clusters} FCM-derived Gaussian MFs to {antecedent_obj.label}.")
+    st.success(f"{antecedent_obj.label}: Assigned {n_clusters} Gaussian MFs.")
 
+# --- Apply FCM-derived MFs to All Antecedents ---
+with st.expander("Assign Membership Functions using FCM"):
+    assign_fcm_mfs(glucose, fcm_mf_params['glucose'], n_clusters_glucose,
+                   ['very_low_gl', 'low_gl', 'normal_gl', 'high_gl'])
+    assign_fcm_mfs(bmi, fcm_mf_params['bmi'], n_clusters_bmi,
+                   ['underweight_bmi', 'normal_bmi', 'overweight_bmi', 'obese_bmi'])
+    assign_fcm_mfs(age, fcm_mf_params['age'], n_clusters_age,
+                   ['young_age', 'middle_aged_age', 'senior_age', 'elderly_age'])
+    assign_fcm_mfs(blood_pressure, fcm_mf_params['blood_pressure'], n_clusters_blood_pressure,
+                   ['very_low_bp', 'low_bp', 'normal_bp', 'elevated_bp', 'high_bp'])
+    assign_fcm_mfs(pregnancies, fcm_mf_params['pregnancies'], n_clusters_pregnancies,
+                   ['zero_preg', 'low_preg', 'medium_preg', 'high_preg', 'very_high_preg'])
+    assign_fcm_mfs(dpf, fcm_mf_params['diabetes_pedigree_function'], n_clusters_dpf,
+                   ['very_low_dpf', 'low_dpf', 'medium_dpf', 'high_dpf'])
+    assign_fcm_mfs(skin_thickness, fcm_mf_params['skin_thickness'], n_clusters_skin_thickness,
+                   ['very_thin_skin', 'thin_skin', 'normal_skin', 'thick_skin', 'very_thick_skin'])
+    assign_fcm_mfs(insulin, fcm_mf_params['insulin'], n_clusters_insulin,
+                   ['very_low_insulin', 'low_insulin', 'normal_insulin', 'elevated_ins', 'very_high_ins'])
 
-# Assign MFs for each antecedent using the FCM results
-# IMPORTANT: The 'names' list should match the number of clusters you chose for each feature.
-# If you chose 4 clusters for Glucose, you'd need 4 names here.
-# These names will then be used in your fuzzy rules in Cell 5.
-
-assign_fcm_mfs(glucose, fcm_mf_params['glucose'], n_clusters_glucose,
-               default_names=['very_low_gl', 'low_gl', 'normal_gl', 'high_gl'])
-assign_fcm_mfs(bmi, fcm_mf_params['bmi'], n_clusters_bmi,
-               default_names=['underweight_bmi', 'normal_bmi', 'overweight_bmi', 'obese_bmi'])
-assign_fcm_mfs(age, fcm_mf_params['age'], n_clusters_age,
-               default_names=['young_age', 'middle_aged_age', 'senior_age', 'elderly_age'])
-assign_fcm_mfs(blood_pressure, fcm_mf_params['blood_pressure'], n_clusters_blood_pressure,
-               default_names=['very_low_bp', 'low_bp', 'normal_bp', 'elevated_bp', 'high_bp'])
-assign_fcm_mfs(pregnancies, fcm_mf_params['pregnancies'], n_clusters_pregnancies,
-               default_names=['zero_preg', 'low_preg', 'medium_preg', 'high_preg', 'very_high_preg'])
-assign_fcm_mfs(dpf, fcm_mf_params['diabetes_pedigree_function'], n_clusters_dpf,
-               default_names=['very_low_dpf', 'low_dpf', 'medium_dpf', 'high_dpf'])
-assign_fcm_mfs(skin_thickness, fcm_mf_params['skin_thickness'], n_clusters_skin_thickness,
-               default_names=['very_thin_skin', 'thin_skin', 'normal_skin', 'thick_skin', 'very_thick_skin'])
-assign_fcm_mfs(insulin, fcm_mf_params['insulin'], n_clusters_insulin,
-               default_names=['very_low_insulin', 'low_insulin', 'normal_insulin', 'elevated_ins', 'very_high_ins'])
 
 
 # --- IMPORTANT: COMMENTED OUT MANUAL MF DEFINITIONS ---
@@ -452,108 +405,29 @@ risk_simulation = ctrl.ControlSystemSimulation(risk_ctrl_system)
 # df['predicted_fuzzy_risk'] = results
 
 #cell 8
-# --- To process the entire DataFrame ---
-import streamlit as st
-results = []
-for i in range(len(df)):
-    try:
-        risk_simulation.input['glucose'] = df['Glucose'].iloc[i]
-        risk_simulation.input['bmi'] = df['BMI'].iloc[i]
-        risk_simulation.input['age'] = df['Age'].iloc[i]
-        risk_simulation.input['blood_pressure'] = df['BloodPressure'].iloc[i]
-        risk_simulation.input['pregnancies'] = df['Pregnancies'].iloc[i]
-        risk_simulation.input['diabetes_pedigree_function'] = df['DiabetesPedigreeFunction'].iloc[i]
-        risk_simulation.input['skin_thickness'] = df['SkinThickness'].iloc[i]
-        risk_simulation.input['insulin'] = df['Insulin'].iloc[i]
-        risk_simulation.compute()
-        results.append(risk_simulation.output['diabetes_risk'])
-    except Exception as e:
-        # It's good practice to print the row number and the error for debugging
-        print(f"Error processing row {i}: {e}")
-        results.append(np.nan) # Append NaN if an error occurs
+# --- Classification Metrics (Streamlit Version) ---
 
-df['predicted_fuzzy_risk'] = results
-# The final print statement for the DataFrame head was also adjusted slightly
-# to print more rows for better observation.
-st.subheader("Results for the first few rows after processing the entire DataFrame:")
-st.dataframe(df[['Outcome', 'predicted_fuzzy_risk']].head(10))
+st.subheader(f"📊 Classification Metrics (Optimal Threshold = {optimal_threshold}%)")
 
-#cell 9
-import numpy as np
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_curve, roc_auc_score, confusion_matrix, classification_report
-import matplotlib.pyplot as plt
-import seaborn as sns
-import pandas as pd # Ensure pandas is imported if not already
+# Display numerical metrics
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("Accuracy", f"{accuracy:.4f}")
+col2.metric("Precision", f"{precision:.4f}")
+col3.metric("Recall", f"{recall:.4f}")
+col4.metric("F1-Score", f"{f1:.4f}")
 
-# --- 7. Calculate Classification Metrics ---
+# Display the optimal threshold
+st.info(f"**Optimal Threshold selected by maximizing F1-Score for Outcome=1:** `{optimal_threshold:.2f}`")
 
-# IMPORTANT: Ensure 'df' is available and 'predicted_fuzzy_risk' column is populated
-# from your previous fuzzy logic simulation, and 'Outcome' is the true label.
+# Confusion Matrix Visualization
+st.subheader("🧮 Confusion Matrix")
+fig, ax = plt.subplots()
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', cbar=False, ax=ax)
+ax.set_xlabel('Predicted')
+ax.set_ylabel('Actual')
+ax.set_title('Confusion Matrix')
+st.pyplot(fig)
 
-# First, handle any remaining NaNs in 'predicted_fuzzy_risk' if any error occurred
-# (though ideally, there shouldn't be any now if preprocessing worked)
-# Make a copy to avoid SettingWithCopyWarning if you modify df later
-df_eval = df.copy()
-df_eval.dropna(subset=['predicted_fuzzy_risk'], inplace=True)
-
-# Extract true labels and fuzzy risk scores for ROC AUC and threshold optimization
-y_true = df_eval['Outcome']
-y_scores = df_eval['predicted_fuzzy_risk']
-
-# Calculate ROC curve to get all possible thresholds
-fpr, tpr, thresholds = roc_curve(y_true, y_scores)
-
-# Find the optimal threshold that maximizes F1-score for the positive class (Outcome=1)
-# We need to compute F1-score for each threshold
-f1_scores = []
-for t in thresholds:
-    # Ensure t is not NaN or inf, and that it's within a reasonable range for predicted_fuzzy_risk
-    if not np.isnan(t) and np.isfinite(t):
-        # Predict binary outcome for the current threshold
-        y_pred_at_t = (y_scores >= t).astype(int)
-        # Calculate F1-score for the positive class (pos_label=1)
-        # Handle cases where precision or recall might be 0 due to no positive predictions
-        try:
-            f1 = f1_score(y_true, y_pred_at_t, pos_label=1)
-            f1_scores.append(f1)
-        except ValueError: # This happens if there are no positive predictions or true positives for a given threshold
-            f1_scores.append(0.0) # Assign 0 F1-score if calculation fails (e.g., no positive predictions)
-    else:
-        f1_scores.append(0.0) # Assign 0 F1-score for invalid thresholds
-
-# Find the threshold that corresponds to the maximum F1-score
-optimal_f1_idx = np.argmax(f1_scores)
-optimal_threshold = thresholds[optimal_f1_idx]
-
-# Round the optimal threshold for cleaner display
-optimal_threshold = round(optimal_threshold, 2)
-
-# Convert continuous fuzzy risk scores into binary predictions using the optimal threshold
-df_eval['predicted_binary_outcome'] = (df_eval['predicted_fuzzy_risk'] >= optimal_threshold).astype(int)
-y_pred = df_eval['predicted_binary_outcome']
-
-
-print(f"\n--- Classification Metrics (Optimal Threshold = {optimal_threshold}%) ---")
-print(f"Optimal Threshold selected by maximizing F1-Score for Diabetes (Outcome 1): {optimal_threshold:.2f}%")
-
-# Accuracy
-accuracy = accuracy_score(y_true, y_pred)
-print(f"Accuracy: {accuracy:.4f}")
-
-# Precision, Recall, F1-Score
-# 'pos_label=1' specifies that '1' is our positive class (diabetes)
-precision = precision_score(y_true, y_pred, pos_label=1)
-recall = recall_score(y_true, y_pred, pos_label=1)
-f1 = f1_score(y_true, y_pred, pos_label=1)
-
-print(f"Precision (for Outcome 1): {precision:.4f}")
-print(f"Recall (for Outcome 1): {recall:.4f}")
-print(f"F1-Score (for Outcome 1): {f1:.4f}")
-
-# Confusion Matrix
-cm = confusion_matrix(y_true, y_pred)
-print("\nConfusion Matrix:")
-print(cm)
 # Interpretation of Confusion Matrix:
 # [[TN, FP],
 #  [FN, TP]]
@@ -563,52 +437,45 @@ print(cm)
 # TP: True Positives (Actual 1, Predicted 1) - Correctly identified as diabetic
 
 # Classification Report (provides all the above in a neat format)
-print("\nClassification Report:")
-print(classification_report(y_true, y_pred, target_names=['No Diabetes (0)', 'Diabetes (1)']))
+st.subheader("📄 Classification Report")
+report = classification_report(y_true, y_pred, target_names=['No Diabetes (0)', 'Diabetes (1)'])
+st.text(report)
 
 # ROC AUC Score
 # ROC AUC uses the probability scores, not the binary predictions
 # Higher is better, 0.5 is random, 1.0 is perfect
 roc_auc = roc_auc_score(y_true, y_scores)
-print(f"ROC AUC Score: {roc_auc:.4f}")
+st.metric("ROC AUC Score", f"{roc_auc:.4f}")
 
 # --- 8. Visualize ROC Curve ---
-plt.figure(figsize=(8, 6))
-plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'ROC curve (area = {roc_auc:.2f})')
-plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--', label='Random Guessing (AUC = 0.5)')
-# Plot the optimal threshold point on the ROC curve
-optimal_tpr = tpr[optimal_f1_idx]
-optimal_fpr = fpr[optimal_f1_idx]
-plt.scatter(optimal_fpr, optimal_tpr, marker='o', s=100, color='red', label=f'Optimal Threshold ({optimal_threshold}%)')
-
-plt.xlim([0.0, 1.0])
-plt.ylim([0.0, 1.05])
-plt.xlabel('False Positive Rate (FPR)')
-plt.ylabel('True Positive Rate (TPR) / Recall')
-plt.title('Receiver Operating Characteristic (ROC) Curve')
-plt.legend(loc="lower right")
-plt.grid(True)
-plt.show()
+st.subheader("📈 ROC Curve")
+fig_roc, ax_roc = plt.subplots(figsize=(8, 6))
+ax_roc.plot(fpr, tpr, color='darkorange', lw=2, label=f'ROC curve (AUC = {roc_auc:.2f})')
+ax_roc.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--', label='Random (AUC = 0.5)')
+ax_roc.scatter(fpr[optimal_f1_idx], tpr[optimal_f1_idx], color='red', s=100, label=f'Optimal Threshold ({optimal_threshold})')
+ax_roc.set(xlabel='False Positive Rate', ylabel='True Positive Rate', title='ROC Curve')
+ax_roc.legend(loc='lower right')
+ax_roc.grid(True)
+st.pyplot(fig_roc)
 
 # --- Optional: Visualize Predicted Risk Distribution ---
-plt.figure(figsize=(10, 6))
-# Explicitly set the number of bins to avoid MemoryError during automatic bin calculation
-sns.histplot(df_eval[df_eval['Outcome'] == 0]['predicted_fuzzy_risk'], color='blue', label='No Diabetes', kde=True, stat='density', alpha=0.6, bins=30)
-sns.histplot(df_eval[df_eval['Outcome'] == 1]['predicted_fuzzy_risk'], color='red', label='Diabetes', kde=True, stat='density', alpha=0.6, bins=30)
-plt.axvline(optimal_threshold, color='green', linestyle='--', label=f'Optimal Classification Threshold ({optimal_threshold}%)')
-plt.title('Distribution of Predicted Fuzzy Risk by Actual Outcome')
-plt.xlabel('Predicted Fuzzy Risk (%)')
-plt.ylabel('Density')
-plt.legend()
-plt.grid(axis='y', alpha=0.75)
-plt.show()
+st.subheader("🔍 Predicted Fuzzy Risk Distribution")
+fig_dist, ax_dist = plt.subplots(figsize=(10, 6))
+sns.histplot(df_eval[df_eval['Outcome'] == 0]['predicted_fuzzy_risk'], color='blue', label='No Diabetes', kde=True, stat='density', alpha=0.6, bins=30, ax=ax_dist)
+sns.histplot(df_eval[df_eval['Outcome'] == 1]['predicted_fuzzy_risk'], color='red', label='Diabetes', kde=True, stat='density', alpha=0.6, bins=30, ax=ax_dist)
+ax_dist.axvline(optimal_threshold, color='green', linestyle='--', label=f'Optimal Threshold ({optimal_threshold})')
+ax_dist.set(xlabel='Predicted Risk (%)', ylabel='Density', title='Fuzzy Risk Distribution by Outcome')
+ax_dist.legend()
+ax_dist.grid(axis='y', alpha=0.75)
+st.pyplot(fig_dist)
 
 #cell10
 # --- 8. Visualize FCM-derived Membership Functions (NEW SECTION) ---
 # This code should be placed after your FCM calculations and after
 # you've assigned the FCM-derived MFs to your Antecedent objects.
 
-print("\n--- Visualizing FCM-derived Membership Functions ---")
+# --- FCM-Derived Membership Function Visualization ---
+st.subheader("📊 FCM-Derived Membership Functions")
 
 # List of your antecedent objects
 antecedents_to_view = [
@@ -624,130 +491,134 @@ antecedents_to_view = [
 
 # Iterate through each antecedent and display its membership functions
 for antecedent in antecedents_to_view:
-    antecedent.view()
-    plt.title(f"Membership Functions for {antecedent.label} (FCM-Derived)")
-    plt.show()
+    st.markdown(f"**{antecedent.label}**")
+    fig, ax = plt.subplots()
+    antecedent.view(ax=ax)
+    st.pyplot(fig)
 
-# After viewing, you can add print statements to review the centers and sigmas
-# For example:
-print("\n--- FCM Parameters Review ---")
+# --- FCM Parameters Review ---
+st.subheader("🔧 FCM Parameters Summary")
 for key, params in fcm_mf_params.items():
-    print(f"\n{key.capitalize()} (FPC: {params['fpc']:.4f}):")
-    print(f"  Centers: {np.array2string(params['centers'], precision=2, floatmode='fixed')}")
-    print(f"  Sigmas:  {np.array2string(np.array(params['sigmas']), precision=2, floatmode='fixed')}")
+    st.markdown(f"**{key.capitalize()}** (FPC: {params['fpc']:.4f})")
+    st.text(f"Centers: {np.array2string(params['centers'], precision=2, floatmode='fixed')}")
+    st.text(f"Sigmas:  {np.array2string(np.array(params['sigmas']), precision=2, floatmode='fixed')}")
 
-# You can also manually adjust the sigma for a specific antecedent if needed
-# For example, if 'glucose' MFs look too wide:
-# glucose['low_gl'].mf = fuzz.gaussmf(glucose.universe, fcm_mf_params['glucose']['centers'][0], 10) # Reduce sigma to 10
-# glucose['normal_gl'].mf = fuzz.gaussmf(glucose.universe, fcm_mf_params['glucose']['centers'][1], 15) # Reduce sigma to 15
-# glucose['high_gl'].mf = fuzz.gaussmf(glucose.universe, fcm_mf_params['glucose']['centers'][2], 20) # Reduce sigma to 20
+# --- Risk Categorization using K-Means ---
+st.subheader("📉 K-Means Risk Categorization")
 
-# OR, you can go back and adjust the 'base_sigma' calculation in the get_fcm_mf_params function
-# and re-run the FCM part to see if a different heuristic for sigma helps.
+st.markdown(f"""
+**Learned Thresholds:**  
+- Low Risk: < {low_medium_threshold}%  
+- Medium Risk: {low_medium_threshold}% - {medium_high_threshold}%  
+- High Risk: ≥ {medium_high_threshold}%
+""")
 
-#cell 11
-import warnings
-from sklearn.cluster import KMeans
+# Patient count
+risk_category_counts = df_eval['risk_category'].value_counts().reindex(risk_order[:-1])
+st.markdown("**Patient Counts by Risk Category:**")
+st.dataframe(risk_category_counts.rename("Count"))
 
-# Suppress the UserWarning from KMeans if n_init is not explicitly set.
-# KMeans will default to n_init=10 in 1.4, but it's good practice to set it.
-warnings.filterwarnings("ignore", message="Number of distinct clusters")
-
-
-# --- 9. Categorize Risk into Low, Medium, High Clusters ---
-
-# Automatically find thresholds using K-Means clustering on predicted fuzzy risk scores
-# Reshape the data for KMeans (it expects 2D array)
-fuzzy_risk_scores = df_eval['predicted_fuzzy_risk'].values.reshape(-1, 1)
-
-# Initialize and fit KMeans with 3 clusters
-# n_init='auto' ensures it runs multiple times with different centroids seeds
-kmeans = KMeans(n_clusters=3, random_state=42, n_init='auto')
-kmeans.fit(fuzzy_risk_scores)
-
-# Get the cluster centers and sort them to define thresholds
-sorted_centers = np.sort(kmeans.cluster_centers_.flatten())
-
-# Define thresholds based on the midpoints between sorted cluster centers
-# The first threshold is between the lowest and middle cluster centers
-low_medium_threshold = (sorted_centers[0] + sorted_centers[1]) / 2
-# The second threshold is between the middle and highest cluster centers
-medium_high_threshold = (sorted_centers[1] + sorted_centers[2]) / 2
-
-# Round thresholds to two decimal places for cleaner display
-low_medium_threshold = round(low_medium_threshold, 2)
-medium_high_threshold = round(medium_high_threshold, 2)
-
-
-# Categorize predicted fuzzy risk scores using the learned thresholds
-df_eval['risk_category'] = 'N/A' # Initialize with N/A for safety
-
-df_eval.loc[df_eval['predicted_fuzzy_risk'] < low_medium_threshold, 'risk_category'] = 'Low Risk'
-df_eval.loc[(df_eval['predicted_fuzzy_risk'] >= low_medium_threshold) &
-            (df_eval['predicted_fuzzy_risk'] < medium_high_threshold), 'risk_category'] = 'Medium Risk'
-df_eval.loc[df_eval['predicted_fuzzy_risk'] >= medium_high_threshold, 'risk_category'] = 'High Risk'
-
-print(f"\n--- Diabetes Risk Categorization Results (Data-Driven Thresholds, K-Means clustering) ---")
-print(f"Learned Thresholds: Low Risk < {low_medium_threshold}%, Medium Risk {low_medium_threshold}% - {medium_high_threshold}%, High Risk >= {medium_high_threshold}%")
-
-# Define the desired order for risk categories, including 'All' for proper reindexing
-risk_order = ['High Risk', 'Medium Risk', 'Low Risk', 'All']
-
-# Print counts for each risk category in the desired order
-risk_category_counts = df_eval['risk_category'].value_counts().reindex(risk_order[:-1]) # Exclude 'All' for this specific count
-print("\nPatient Counts by Risk Category:")
-print(risk_category_counts)
-
-# Calculate percentages for each risk category
+# Percentage per category
 total_patients = len(df_eval)
-print("\nPercentage of Total Patients in Each Risk Category:")
-for category in risk_order[:-1]: # Iterate through ordered categories (excluding 'All')
+st.markdown("**Percentage of Patients per Category:**")
+for category in risk_order[:-1]:
     count = risk_category_counts.get(category, 0)
-    percentage = (count / total_patients) * 100 if total_patients > 0 else 0
-    print(f"- {category}: {percentage:.2f}%")
+    pct = (count / total_patients) * 100 if total_patients > 0 else 0
+    st.markdown(f"- {category}: {pct:.2f}%")
 
-
-# Print counts for each risk category, broken down by actual outcome, in the desired order
-print("\nActual Outcome Distribution by Risk Category:")
+# Outcome Distribution
+st.markdown("**Outcome Distribution by Risk Category:**")
 risk_outcome_crosstab = pd.crosstab(df_eval['risk_category'], df_eval['Outcome'], margins=True)
-# Reindex for desired row order, now including 'All'
 risk_outcome_crosstab = risk_outcome_crosstab.reindex(risk_order)
 risk_outcome_crosstab.columns = ['Actual No Diabetes', 'Actual Diabetes', 'Total']
-print(risk_outcome_crosstab)
+st.dataframe(risk_outcome_crosstab)
 
-# Calculate accuracy/purity within each risk category
-print("\nAccuracy/Purity within Each Risk Category:")
-for category in risk_order[:-1]: # Iterate through ordered categories (excluding 'All')
+# Accuracy/Purity by Category
+st.markdown("**Category Purity (Accuracy within each Risk Group):**")
+for category in risk_order[:-1]:
     row = risk_outcome_crosstab.loc[category]
-    total_in_category = row['Total']
-
-    if total_in_category > 0:
-        actual_no_diabetes_percent = (row['Actual No Diabetes'] / total_in_category) * 100
-        actual_diabetes_percent = (row['Actual Diabetes'] / total_in_category) * 100
-        print(f"- {category}:")
-        print(f"  - Actual No Diabetes: {actual_no_diabetes_percent:.2f}%")
-        print(f"  - Actual Diabetes: {actual_diabetes_percent:.2f}%")
+    total_in_cat = row['Total']
+    if total_in_cat > 0:
+        pct_no_diabetes = (row['Actual No Diabetes'] / total_in_cat) * 100
+        pct_diabetes = (row['Actual Diabetes'] / total_in_cat) * 100
+        st.markdown(f"- **{category}**")
+        st.markdown(f"  - Actual No Diabetes: {pct_no_diabetes:.2f}%")
+        st.markdown(f"  - Actual Diabetes: {pct_diabetes:.2f}%")
     else:
-        print(f"- {category}: No patients in this category.")
-
+        st.markdown(f"- **{category}**: No patients in this category.")
 
 # Visualize the three risk categories on the distribution plot
-plt.figure(figsize=(12, 7))
+st.subheader("📈 Distribution of Predicted Fuzzy Risk")
 
-# Plot distributions. We will manually create the legend to control order.
-sns.histplot(df_eval[df_eval['Outcome'] == 0]['predicted_fuzzy_risk'], color='blue', label='_nolegend_', kde=True, stat='density', alpha=0.6, bins=30)
-sns.histplot(df_eval[df_eval['Outcome'] == 1]['predicted_fuzzy_risk'], color='red', label='_nolegend_', kde=True, stat='density', alpha=0.6, bins=30)
+# Create figure
+fig, ax = plt.subplots(figsize=(12, 7))
 
-# Add vertical lines for the two thresholds
-plt.axvline(low_medium_threshold, color='green', linestyle='--', label=f'Low/Medium Risk Threshold ({low_medium_threshold}%)')
-plt.axvline(medium_high_threshold, color='purple', linestyle=':', label=f'Medium/High Risk Threshold ({medium_high_threshold}%)')
+# Plot histograms for each class (0 = No Diabetes, 1 = Diabetes)
+sns.histplot(df_eval[df_eval['Outcome'] == 0]['predicted_fuzzy_risk'],
+             color='blue', label='_nolegend_', kde=True, stat='density', alpha=0.6, bins=30, ax=ax)
 
-plt.title('Distribution of Predicted Fuzzy Risk (by Actual Outcome and Risk Categories)')
-plt.xlabel('Predicted Fuzzy Risk (%)')
-plt.ylabel('Density')
+sns.histplot(df_eval[df_eval['Outcome'] == 1]['predicted_fuzzy_risk'],
+             color='red', label='_nolegend_', kde=True, stat='density', alpha=0.6, bins=30, ax=ax)
 
-# Manually create legend entries for 'Actual No Diabetes' and 'Actual Diabetes' first
-from matplotlib.patches import Patch
+# Plot threshold lines
+ax.axvline(low_medium_threshold, color='green', linestyle='--',
+           label=f'Low/Medium Threshold ({low_medium_threshold}%)')
+
+ax.axvline(medium_high_threshold, color='purple', linestyle=':',
+           label=f'Medium/High Threshold ({medium_high_threshold}%)')
+
+# Title and labels
+ax.set_title('Distribution of Predicted Fuzzy Risk by Actual Outcome')
+ax.set_xlabel('Predicted Fuzzy Risk (%)')
+ax.set_ylabel('Density')
+ax.grid(axis='y', alpha=0.75)
+
+# Custom legend
+legend_handles = [
+    Patch(facecolor='blue', edgecolor='black', alpha=0.6, label='Actual No Diabetes'),
+    Patch(facecolor='red', edgecolor='black', alpha=0.6, label='Actual Diabetes'),
+    plt.Line2D([0], [0], color='green', linestyle='--', lw=2, label=f'Low/Medium Threshold ({low_medium_threshold}%)'),
+    plt.Line2D([0], [0], color='purple', linestyle=':', lw=2, label=f'Medium/High Threshold ({medium_high_threshold}%)')
+]
+ax.legend(handles=legend_handles, loc='upper right')
+
+st.pyplot(fig)
+
+# Display thresholds
+st.markdown(f"""
+### 🧪 K-Means Risk Thresholds
+- **Low Risk**: < {low_medium_threshold}%
+- **Medium Risk**: {low_medium_threshold}% – {medium_high_threshold}%
+- **High Risk**: ≥ {medium_high_threshold}%
+""")
+
+# Visualize the three risk categories on the distribution plot
+st.subheader("📊 Distribution of Predicted Fuzzy Risk by Actual Outcome")
+
+# Create the figure
+fig, ax = plt.subplots(figsize=(12, 7))
+
+# Plot histograms by outcome
+sns.histplot(df_eval[df_eval['Outcome'] == 0]['predicted_fuzzy_risk'],
+             color='blue', label='_nolegend_', kde=True, stat='density', alpha=0.6, bins=30, ax=ax)
+
+sns.histplot(df_eval[df_eval['Outcome'] == 1]['predicted_fuzzy_risk'],
+             color='red', label='_nolegend_', kde=True, stat='density', alpha=0.6, bins=30, ax=ax)
+
+# Add vertical threshold lines
+ax.axvline(low_medium_threshold, color='green', linestyle='--',
+           label=f'Low/Medium Risk Threshold ({low_medium_threshold}%)')
+
+ax.axvline(medium_high_threshold, color='purple', linestyle=':',
+           label=f'Medium/High Risk Threshold ({medium_high_threshold}%)')
+
+# Add title and labels
+ax.set_title('Distribution of Predicted Fuzzy Risk (by Actual Outcome and Risk Categories)')
+ax.set_xlabel('Predicted Fuzzy Risk (%)')
+ax.set_ylabel('Density')
+ax.grid(axis='y', alpha=0.75)
+
+# Custom legend
 custom_legend_handles = [
     Patch(facecolor='blue', edgecolor='black', alpha=0.6, label='Actual No Diabetes'),
     Patch(facecolor='red', edgecolor='black', alpha=0.6, label='Actual Diabetes'),
@@ -755,120 +626,7 @@ custom_legend_handles = [
     plt.Line2D([0], [0], color='purple', linestyle=':', lw=2, label=f'Medium/High Risk Threshold ({medium_high_threshold}%)')
 ]
 
-plt.legend(handles=custom_legend_handles, loc='upper right')
-plt.grid(axis='y', alpha=0.75)
-plt.show()
+ax.legend(handles=custom_legend_handles, loc='upper right')
 
-#cell 11
-import warnings
-from sklearn.cluster import KMeans
-
-# Suppress the UserWarning from KMeans if n_init is not explicitly set.
-# KMeans will default to n_init=10 in 1.4, but it's good practice to set it.
-warnings.filterwarnings("ignore", message="Number of distinct clusters")
-
-
-# --- 9. Categorize Risk into Low, Medium, High Clusters ---
-
-# Automatically find thresholds using K-Means clustering on predicted fuzzy risk scores
-# Reshape the data for KMeans (it expects 2D array)
-fuzzy_risk_scores = df_eval['predicted_fuzzy_risk'].values.reshape(-1, 1)
-
-# Initialize and fit KMeans with 3 clusters
-# n_init='auto' ensures it runs multiple times with different centroids seeds
-kmeans = KMeans(n_clusters=3, random_state=42, n_init='auto')
-kmeans.fit(fuzzy_risk_scores)
-
-# Get the cluster centers and sort them to define thresholds
-sorted_centers = np.sort(kmeans.cluster_centers_.flatten())
-
-# Define thresholds based on the midpoints between sorted cluster centers
-# The first threshold is between the lowest and middle cluster centers
-low_medium_threshold = (sorted_centers[0] + sorted_centers[1]) / 2
-# The second threshold is between the middle and highest cluster centers
-medium_high_threshold = (sorted_centers[1] + sorted_centers[2]) / 2
-
-# Round thresholds to two decimal places for cleaner display
-low_medium_threshold = round(low_medium_threshold, 2)
-medium_high_threshold = round(medium_high_threshold, 2)
-
-
-# Categorize predicted fuzzy risk scores using the learned thresholds
-df_eval['risk_category'] = 'N/A' # Initialize with N/A for safety
-
-df_eval.loc[df_eval['predicted_fuzzy_risk'] < low_medium_threshold, 'risk_category'] = 'Low Risk'
-df_eval.loc[(df_eval['predicted_fuzzy_risk'] >= low_medium_threshold) &
-            (df_eval['predicted_fuzzy_risk'] < medium_high_threshold), 'risk_category'] = 'Medium Risk'
-df_eval.loc[df_eval['predicted_fuzzy_risk'] >= medium_high_threshold, 'risk_category'] = 'High Risk'
-
-print(f"\n--- Diabetes Risk Categorization Results (Data-Driven Thresholds, K-Means clustering) ---")
-print(f"Learned Thresholds: Low Risk < {low_medium_threshold}%, Medium Risk {low_medium_threshold}% - {medium_high_threshold}%, High Risk >= {medium_high_threshold}%")
-
-# Define the desired order for risk categories, including 'All' for proper reindexing
-risk_order = ['High Risk', 'Medium Risk', 'Low Risk', 'All']
-
-# Print counts for each risk category in the desired order
-risk_category_counts = df_eval['risk_category'].value_counts().reindex(risk_order[:-1]) # Exclude 'All' for this specific count
-print("\nPatient Counts by Risk Category:")
-print(risk_category_counts)
-
-# Calculate percentages for each risk category
-total_patients = len(df_eval)
-print("\nPercentage of Total Patients in Each Risk Category:")
-for category in risk_order[:-1]: # Iterate through ordered categories (excluding 'All')
-    count = risk_category_counts.get(category, 0)
-    percentage = (count / total_patients) * 100 if total_patients > 0 else 0
-    print(f"- {category}: {percentage:.2f}%")
-
-
-# Print counts for each risk category, broken down by actual outcome, in the desired order
-print("\nActual Outcome Distribution by Risk Category:")
-risk_outcome_crosstab = pd.crosstab(df_eval['risk_category'], df_eval['Outcome'], margins=True)
-# Reindex for desired row order, now including 'All'
-risk_outcome_crosstab = risk_outcome_crosstab.reindex(risk_order)
-risk_outcome_crosstab.columns = ['Actual No Diabetes', 'Actual Diabetes', 'Total']
-print(risk_outcome_crosstab)
-
-# Calculate accuracy/purity within each risk category
-print("\nAccuracy/Purity within Each Risk Category:")
-for category in risk_order[:-1]: # Iterate through ordered categories (excluding 'All')
-    row = risk_outcome_crosstab.loc[category]
-    total_in_category = row['Total']
-
-    if total_in_category > 0:
-        actual_no_diabetes_percent = (row['Actual No Diabetes'] / total_in_category) * 100
-        actual_diabetes_percent = (row['Actual Diabetes'] / total_in_category) * 100
-        print(f"- {category}:")
-        print(f"  - Actual No Diabetes: {actual_no_diabetes_percent:.2f}%")
-        print(f"  - Actual Diabetes: {actual_diabetes_percent:.2f}%")
-    else:
-        print(f"- {category}: No patients in this category.")
-
-
-# Visualize the three risk categories on the distribution plot
-plt.figure(figsize=(12, 7))
-
-# Plot distributions. We will manually create the legend to control order.
-sns.histplot(df_eval[df_eval['Outcome'] == 0]['predicted_fuzzy_risk'], color='blue', label='_nolegend_', kde=True, stat='density', alpha=0.6, bins=30)
-sns.histplot(df_eval[df_eval['Outcome'] == 1]['predicted_fuzzy_risk'], color='red', label='_nolegend_', kde=True, stat='density', alpha=0.6, bins=30)
-
-# Add vertical lines for the two thresholds
-plt.axvline(low_medium_threshold, color='green', linestyle='--', label=f'Low/Medium Risk Threshold ({low_medium_threshold}%)')
-plt.axvline(medium_high_threshold, color='purple', linestyle=':', label=f'Medium/High Risk Threshold ({medium_high_threshold}%)')
-
-plt.title('Distribution of Predicted Fuzzy Risk (by Actual Outcome and Risk Categories)')
-plt.xlabel('Predicted Fuzzy Risk (%)')
-plt.ylabel('Density')
-
-# Manually create legend entries for 'Actual No Diabetes' and 'Actual Diabetes' first
-from matplotlib.patches import Patch
-custom_legend_handles = [
-    Patch(facecolor='blue', edgecolor='black', alpha=0.6, label='Actual No Diabetes'),
-    Patch(facecolor='red', edgecolor='black', alpha=0.6, label='Actual Diabetes'),
-    plt.Line2D([0], [0], color='green', linestyle='--', lw=2, label=f'Low/Medium Risk Threshold ({low_medium_threshold}%)'),
-    plt.Line2D([0], [0], color='purple', linestyle=':', lw=2, label=f'Medium/High Risk Threshold ({medium_high_threshold}%)')
-]
-
-plt.legend(handles=custom_legend_handles, loc='upper right')
-plt.grid(axis='y', alpha=0.75)
-plt.show()
+# Render the figure in Streamlit
+st.pyplot(fig)
